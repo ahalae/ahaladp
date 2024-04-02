@@ -72,8 +72,15 @@ public class CacheClient {
         String shopJson = stringRedisTemplate.opsForValue().get(key);
 
         if (StrUtil.isBlank(shopJson)) {
-            //不存在则返回
-            return null;
+            //不存在则读入
+            //判断是否为空
+            if(shopJson!=null){
+                return null;
+            }
+            //不存在，读数据库
+            R r = dbFallback.apply(id);
+            this.setWithLogicalExpire(key,r,time,unit);
+            return r;
         }
         //命中，反序列化
         RedisData redisData = JSONUtil.toBean(shopJson, RedisData.class);
