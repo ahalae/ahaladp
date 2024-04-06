@@ -12,6 +12,8 @@ import com.hmdp.service.IUserService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisIdWorker;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.geo.Point;
 import org.springframework.data.redis.connection.RedisGeoCommands;
@@ -123,6 +125,14 @@ class HmDianPingApplicationTests {
 //            }
             stringRedisTemplate.opsForGeo().add(key,locations);
         }
+    }
+    @Autowired
+    private RabbitTemplate rabbitTemplate;
+    @Test
+    public void testSendMessage2SimpleQueue(){
+        String queueName="simple.queue";
+        String message="hello world";
+        rabbitTemplate.convertAndSend(queueName,message);
     }
 
 }

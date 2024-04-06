@@ -12,6 +12,8 @@ import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.stream.*;
@@ -49,18 +51,21 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private StringRedisTemplate stringRedisTemplate;
 
     @Resource
-    RedissonClient redissonClient;
+    private RedissonClient redissonClient;
+
+    @Resource
+    private RabbitTemplate rabbitTemplate;
 
 
     public static final DefaultRedisScript<Long> SECKILL_SCRIPT;
     static{
         SECKILL_SCRIPT=new DefaultRedisScript<>();
-        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill-mq.lua"));
         SECKILL_SCRIPT.setResultType(Long.class);
     }
 
     private static final ExecutorService SECKILL_ORDER_EXECUTOR= Executors.newSingleThreadExecutor();
-    @PostConstruct
+//    @PostConstruct
     private void init(){
         SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
     }
@@ -191,10 +196,33 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             //不为0返回
             return Result.fail(r==1?"库存不足":"不能重复下单");
         }
+        // 为零，把下单信息保存到阻塞队列
+        VoucherOrder voucherOrder = new VoucherOrder();
+        //订单id
+        voucherOrder.setId(orderId);
+        voucherOrder.setUserId(userId);
+        voucherOrder.setVoucherId(voucherId);
+        //添加进消息队列
+        rabbitTemplate.convertAndSend("simple.queue",voucherOrder);
+
+
         //获取代理对象
-        proxy = (IVoucherOrderService) AopContext.currentProxy();
+//        proxy = (IVoucherOrderService) AopContext.currentProxy();
+
+
+
         //返回订单id
         return Result.ok(orderId);
+    }
+    @RabbitListener(queues = "simple.queue")
+    public void listenSimpleQueueMessage(VoucherOrder voucherOrder) {
+        try {
+            proxy = (IVoucherOrderService) AopContext.currentProxy();
+            //创建订单
+            handleVoucherOrder(voucherOrder);
+        } catch (Exception e) {
+            log.error("处理订单异常", e);
+        }
     }
 //    @Override
 //    public Result seckillVoucher(Long voucherId) {
