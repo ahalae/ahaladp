@@ -31,4 +31,7 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+canal:
+    destination: hmdp
+    server: 192.168.200.130:11111
 

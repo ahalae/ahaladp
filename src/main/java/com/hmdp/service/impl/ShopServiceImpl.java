@@ -5,6 +5,8 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.hmdp.config.CaffeineConfig;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.Shop;
@@ -14,6 +16,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import com.hmdp.utils.SystemConstants;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
@@ -32,6 +36,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static cn.hutool.core.thread.ThreadUtil.sleep;
 import static com.hmdp.utils.RedisConstants.*;
 
 /**
@@ -42,6 +47,7 @@ import static com.hmdp.utils.RedisConstants.*;
  * @author 虎哥
  * @since 2021-12-22
  */
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
@@ -50,6 +56,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     CacheClient cacheClient;
 
+    @Autowired
+    private Cache<Long, Shop> shopCache;
     @Override
     public Result queryById(Long id) {
         //缓存穿透
@@ -59,7 +67,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 //        Shop shop=queryWithMutex(id);
         //逻辑过期解决缓存击穿
 //        Shop shop=queryWithLogicalExpire(id);
-        Shop shop=cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY,id, Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
+        // 查找一个缓存元素， 没有查找到的时候返回null
+        // 查找缓存，如果缓存不存在则生成缓存元素,  如果无法生成则返回null
+        Shop shop = shopCache.get(id,k->cacheClient.queryWithMutex(CACHE_SHOP_KEY,id, Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES));
+
         if(shop==null){
             return Result.fail("店铺不存在");
         }
@@ -227,8 +238,15 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         String key=CACHE_SHOP_KEY+id;
         //更新数据库
         updateById(shop);
-        //删除缓存
-        stringRedisTemplate.delete(key);
+
+//        //删除缓存
+//        stringRedisTemplate.delete(key);
+//        //延迟双删
+//        sleep(5);
+//        //删除缓存
+//        stringRedisTemplate.delete(key);
+        //改用canal监听
+
         return null;
     }
 

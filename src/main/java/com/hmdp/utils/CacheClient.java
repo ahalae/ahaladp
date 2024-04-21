@@ -8,8 +8,10 @@ import com.hmdp.entity.Shop;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RedissonClient;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
@@ -86,14 +88,13 @@ public class CacheClient {
         }
         //判断是否存在于布隆过滤器
         if(!bloomFilter.contains(key)){
+            //不存在则返回
             return null;
         }
-        //不存在，读数据库
+        //存在，读数据库
         R r = dbFallback.apply(id);
-        //不存在，返回错误，重写布隆过滤器
+        //存在，返回错误，重写布隆过滤器
         if(r==null) {
-            //空值写入布隆过滤器
-            bloomFilter.add(key);
             return null;
         }
         //存在写入redis
@@ -155,56 +156,57 @@ public class CacheClient {
         return r;
     }
 
-    public Shop queryWithMutex(Long id){
-        //从redis查询缓存
-        String key=CACHE_SHOP_KEY + id;
-        String shopJson = stringRedisTemplate.opsForValue().get(key);
 
-        if (StrUtil.isNotBlank(shopJson)) {
+    public <R,ID> R queryWithMutex(String keyPrefix, ID id, Class<R> type, Function<ID,R> dbFallback,Long time, TimeUnit unit){
+        //从redis查询缓存
+        String key=keyPrefix + id;
+        String json = stringRedisTemplate.opsForValue().get(key);
+
+        if (StrUtil.isNotBlank(json)) {
             //存在则返回
-            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
-            return shop;
+            R r = JSONUtil.toBean(json, type);
+            return r;
         }
         //判断是否为空
-        if(shopJson!=null){
+        if(json!=null){
             return null;
         }
         //实现缓存重建
         //获取互斥锁
         String lockKey=LOCK_SHOP_KEY+id;
-        Shop shop = null;
+        R r = null;
         try {
             boolean isLock = tryLock(lockKey);
             //判断是否获取
             if(!isLock){
                 //失败则休眠
                 Thread.sleep(50);
-                return queryWithMutex(id);
+                return queryWithMutex(keyPrefix,id,type,dbFallback,time,unit);
             }
             //双重查询
-            shopJson = stringRedisTemplate.opsForValue().get(key);
-            if (StrUtil.isNotBlank(shopJson)) {
+            json = stringRedisTemplate.opsForValue().get(key);
+            if (StrUtil.isNotBlank(json)) {
                 //存在则返回
-                shop = JSONUtil.toBean(shopJson, Shop.class);
-                return shop;
+                r = JSONUtil.toBean(json, type);
+                return r;
             }
             //判断是否为空
-            if(shopJson!=null){
+            if(json!=null){
                 return null;
             }
 
             //成功查询数据库
-            shop = getById(id);
+            r = dbFallback.apply(id);
             //模拟重建延时
 //            Thread.sleep(200);
             //不存在，返回错误
-            if(shop==null) {
+            if(r==null) {
                 //空值写入reids 解决缓存穿透
-                stringRedisTemplate.opsForValue().set(key,"",CACHE_NULL_TTL, TimeUnit.MINUTES);
+                stringRedisTemplate.opsForValue().set(key,"",time, unit);
                 return null;
             }
             //存在写入redis
-            stringRedisTemplate.opsForValue().set(key,JSONUtil.toJsonStr(shop),CACHE_SHOP_TTL, TimeUnit.MINUTES);
+            stringRedisTemplate.opsForValue().set(key,JSONUtil.toJsonStr(r),time, unit);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }finally {
@@ -213,8 +215,11 @@ public class CacheClient {
         }
 
         //返回
-        return shop;
+        return r;
     }
+
+
+
 
     private boolean tryLock(String key){
         Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS);
